@@ -1,0 +1,858 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SmartDrive Launch Dashboard</title>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vis-network@latest/dist/vis-network.min.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/vis-network@latest/dist/dist/vis-network.min.css" rel="stylesheet" type="text/css" />
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #333;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .header {
+            background: rgba(255, 255, 255, 0.95);
+            padding: 15px 30px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .header h1 {
+            font-size: 24px;
+            color: #333;
+        }
+        
+        .control-buttons {
+            display: flex;
+            gap: 10px;
+        }
+        
+        .btn {
+            padding: 8px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+        }
+        
+        .btn-start-all {
+            background: #27ae60;
+            color: white;
+        }
+        
+        .btn-start-all:hover {
+            background: #229954;
+        }
+        
+        .btn-stop-all {
+            background: #e74c3c;
+            color: white;
+        }
+        
+        .btn-stop-all:hover {
+            background: #c0392b;
+        }
+        
+        .main-container {
+            flex: 1;
+            display: flex;
+            padding: 20px;
+            gap: 20px;
+            overflow: hidden;
+        }
+        
+        .pipeline-view {
+            flex: 2;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+            position: relative;
+        }
+        
+        .pipeline-canvas {
+            width: 100%;
+            height: 100%;
+            min-height: 500px;
+        }
+        
+        .node-list {
+            flex: 1;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+            overflow-y: auto;
+        }
+        
+        .node-item {
+            background: white;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 15px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+            cursor: pointer;
+            transition: all 0.3s ease;
+            position: relative;
+        }
+        
+        .node-item:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+        
+        .node-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        
+        .node-name {
+            font-weight: 600;
+            font-size: 16px;
+            color: #2c3e50;
+        }
+        
+        .status-led {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+            position: absolute;
+            top: 15px;
+            right: 15px;
+        }
+        
+        .status-led.gray {
+            background: #95a5a6;
+            animation: none;
+        }
+        
+        .status-led.green {
+            background: #27ae60;
+            box-shadow: 0 0 10px rgba(39, 174, 96, 0.5);
+        }
+        
+        .status-led.yellow {
+            background: #f39c12;
+            box-shadow: 0 0 10px rgba(243, 156, 18, 0.5);
+        }
+        
+        .status-led.red {
+            background: #e74c3c;
+            box-shadow: 0 0 10px rgba(231, 76, 60, 0.5);
+        }
+        
+        @keyframes pulse {
+            0% {
+                box-shadow: 0 0 0 0 rgba(39, 174, 96, 0.7);
+            }
+            70% {
+                box-shadow: 0 0 0 10px rgba(39, 174, 96, 0);
+            }
+            100% {
+                box-shadow: 0 0 0 0 rgba(39, 174, 96, 0);
+            }
+        }
+        
+        .node-stats {
+            font-size: 12px;
+            color: #7f8c8d;
+            display: flex;
+            gap: 15px;
+        }
+        
+        .node-controls {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        
+        .btn-node {
+            padding: 5px 15px;
+            font-size: 12px;
+            flex: 1;
+        }
+        
+        .btn-start {
+            background: #3498db;
+            color: white;
+        }
+        
+        .btn-start:hover {
+            background: #2980b9;
+        }
+        
+        .btn-stop {
+            background: #95a5a6;
+            color: white;
+        }
+        
+        .btn-stop:hover {
+            background: #7f8c8d;
+        }
+        
+        .btn-logs {
+            background: #9b59b6;
+            color: white;
+        }
+        
+        .btn-logs:hover {
+            background: #8e44ad;
+        }
+        
+        .log-viewer {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 80%;
+            height: 70%;
+            background: #2c3e50;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+            display: none;
+            flex-direction: column;
+            z-index: 1000;
+        }
+        
+        .log-viewer.active {
+            display: flex;
+        }
+        
+        .log-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+            color: white;
+        }
+        
+        .log-content {
+            flex: 1;
+            background: #1a1a1a;
+            border-radius: 5px;
+            padding: 15px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            color: #ecf0f1;
+            line-height: 1.4;
+        }
+        
+        .log-line {
+            margin-bottom: 2px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        
+        .log-line.error {
+            color: #e74c3c;
+        }
+        
+        .log-line.warning {
+            color: #f39c12;
+        }
+        
+        .log-line.info {
+            color: #3498db;
+        }
+        
+        .close-btn {
+            background: #e74c3c;
+            color: white;
+            border: none;
+            padding: 5px 15px;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        
+        .close-btn:hover {
+            background: #c0392b;
+        }
+        
+        .overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            display: none;
+            z-index: 999;
+        }
+        
+        .overlay.active {
+            display: block;
+        }
+        
+        .topic-info {
+            font-size: 11px;
+            color: #34495e;
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px solid #ecf0f1;
+        }
+        
+        .topic-badge {
+            display: inline-block;
+            background: #ecf0f1;
+            padding: 2px 8px;
+            border-radius: 12px;
+            margin: 2px;
+            font-size: 10px;
+        }
+        
+        .frequency-badge {
+            background: #3498db;
+            color: white;
+            padding: 1px 5px;
+            margin-left: 4px;
+            font-weight: bold;
+        }
+        
+        .frequency-badge.freq-good {
+            background: #27ae60;
+        }
+        
+        .frequency-badge.freq-warning {
+            background: #f39c12;
+        }
+        
+        .frequency-badge.freq-low {
+            background: #e74c3c;
+        }
+        
+        .frequency-badge.freq-active {
+            background: #3498db;
+        }
+        
+        .status-icon {
+            margin-right: 5px;
+            font-weight: bold;
+        }
+        
+        .topic-detail {
+            position: fixed;
+            background: white;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+            z-index: 100;
+            max-width: 300px;
+            display: none;
+        }
+        
+        .topic-detail.show {
+            display: block;
+        }
+        
+        .topic-detail h4 {
+            margin: 0 0 10px 0;
+            color: #2c3e50;
+        }
+        
+        .topic-detail .publisher-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+        
+        .topic-detail .publisher-list li {
+            padding: 3px 0;
+            color: #34495e;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>SmartDrive Launch Dashboard</h1>
+        <div class="control-buttons">
+            <button class="btn btn-start-all" onclick="startAll()">Start All Nodes</button>
+            <button class="btn btn-stop-all" onclick="stopAll()">Stop All Nodes</button>
+        </div>
+    </div>
+    
+    <div class="main-container">
+        <div class="pipeline-view">
+            <div id="pipeline-canvas" class="pipeline-canvas"></div>
+        </div>
+        
+        <div class="node-list" id="node-list">
+            <!-- Node items will be dynamically added here -->
+        </div>
+    </div>
+    
+    <div class="overlay" id="overlay" onclick="closeLogViewer()"></div>
+    
+    <div class="log-viewer" id="log-viewer">
+        <div class="log-header">
+            <h3 id="log-title">Node Logs</h3>
+            <button class="close-btn" onclick="closeLogViewer()">Close</button>
+        </div>
+        <div class="log-content" id="log-content">
+            <!-- Logs will be displayed here -->
+        </div>
+    </div>
+    
+    <script>
+        const socket = io();
+        let nodes = {};
+        let network = null;
+        let currentLogNode = null;
+        
+        // Initialize socket connection
+        socket.on('connect', function() {
+            console.log('Connected to dashboard server');
+            loadNodes();
+        });
+        
+        socket.on('status_update', function(data) {
+            updateNodeStatuses(data);
+        });
+        
+        socket.on('topic_update', function(data) {
+            updateTopicInfo(data);
+        });
+        
+        socket.on('log_update', function(data) {
+            if (currentLogNode === data.node_name) {
+                appendLog(data.log);
+            }
+        });
+        
+        // Load nodes from server
+        async function loadNodes() {
+            try {
+                const response = await fetch('/api/nodes');
+                const nodeData = await response.json();
+                nodes = {};
+                nodeData.forEach(node => {
+                    nodes[node.name] = node;
+                });
+                renderNodeList();
+                renderPipeline();
+            } catch (error) {
+                console.error('Failed to load nodes:', error);
+            }
+        }
+        
+        // Track topic information separately
+        let topicInfo = {};
+        let topicFrequencyCache = {};
+        
+        // Render node list with improved topic display
+        function renderNodeList() {
+            const nodeList = document.getElementById('node-list');
+            nodeList.innerHTML = '';
+            
+            Object.values(nodes).forEach(node => {
+                const nodeItem = document.createElement('div');
+                nodeItem.className = 'node-item';
+                nodeItem.onclick = () => showNodeLogs(node.name);
+                
+                // Build topic HTML with better formatting
+                let topicsHtml = '';
+                if (node.topics_pub && node.topics_pub.length > 0) {
+                    topicsHtml = node.topics_pub.map(topic => {
+                        const freq = getCachedFrequency(topic, node.topic_frequencies);
+                        const expectedFreq = node.expected_freq[topic] || 0;
+                        
+                        // Color code frequency based on expected value
+                        let freqClass = 'frequency-badge';
+                        if (expectedFreq > 0 && freq > 0) {
+                            const ratio = freq / expectedFreq;
+                            if (ratio < 0.5) freqClass += ' freq-low';
+                            else if (ratio < 0.8) freqClass += ' freq-warning';
+                            else freqClass += ' freq-good';
+                        } else if (freq > 0) {
+                            freqClass += ' freq-active'; // Topic is active but no expected frequency
+                        }
+                        
+                        // Get all publishers for this topic
+                        const publishers = getPublishersForTopic(topic);
+                        const pubInfo = publishers.length > 1 ? 
+                            ` (${publishers.length} publishers: ${publishers.join(', ')})` : '';
+                        
+                        return `<span class="topic-badge" title="${topic}${pubInfo}">
+                            ${topic.split('/').pop()}
+                            <span class="${freqClass}">${freq.toFixed(1)}/${expectedFreq}Hz</span>
+                        </span>`;
+                    }).join('');
+                }
+                
+                // Determine node status icon
+                const statusIcon = node.running ? 
+                    (node.status_led === 'green' ? '✓' : 
+                     node.status_led === 'yellow' ? '⚠' : 
+                     node.status_led === 'red' ? '✗' : '○') : '○';
+                
+                nodeItem.innerHTML = `
+                    <div class="status-led ${node.status_led || 'gray'}"></div>
+                    <div class="node-header">
+                        <div class="node-name">
+                            <span class="status-icon">${statusIcon}</span>
+                            ${node.name}
+                        </div>
+                    </div>
+                    <div class="node-stats">
+                        <span>PID: ${node.pid || 'N/A'}</span>
+                        <span>Errors: ${node.error_count || 0}</span>
+                        <span>Warnings: ${node.warning_count || 0}</span>
+                    </div>
+                    <div class="topic-info">
+                        ${topicsHtml || '<span style="color: #95a5a6;">No topics</span>'}
+                    </div>
+                    <div class="node-controls">
+                        <button class="btn btn-node btn-start" onclick="event.stopPropagation(); startNode('${node.name}')">Start</button>
+                        <button class="btn btn-node btn-stop" onclick="event.stopPropagation(); stopNode('${node.name}')">Stop</button>
+                        <button class="btn btn-node btn-logs" onclick="event.stopPropagation(); showNodeLogs('${node.name}')">Logs</button>
+                    </div>
+                `;
+                
+                nodeList.appendChild(nodeItem);
+            });
+        }
+        
+        // Get all publishers for a given topic
+        function getPublishersForTopic(topicName) {
+            const publishers = [];
+            Object.values(nodes).forEach(node => {
+                if (node.running && node.topics_pub && node.topics_pub.includes(topicName)) {
+                    publishers.push(node.name);
+                }
+            });
+            return publishers;
+        }
+        
+        // Update topic information
+        function updateTopicInfo(data) {
+            topicInfo = data;
+            // Update frequency cache
+            data.forEach(topic => {
+                topicFrequencyCache[topic.name] = topic.frequency;
+            });
+            // Re-render if needed
+        }
+        
+        // Get cached frequency for a topic
+        function getCachedFrequency(topicName, nodeFreqs) {
+            // First try node-specific frequency
+            if (nodeFreqs && nodeFreqs[topicName] !== undefined) {
+                return nodeFreqs[topicName];
+            }
+            // Then try cached frequency
+            if (topicFrequencyCache[topicName] !== undefined) {
+                return topicFrequencyCache[topicName];
+            }
+            return 0.0;
+        }
+        
+        // Render pipeline visualization
+        function renderPipeline() {
+            const container = document.getElementById('pipeline-canvas');
+            
+            // Create nodes for visualization
+            const visNodes = new vis.DataSet();
+            const visEdges = new vis.DataSet();
+            
+            Object.values(nodes).forEach((node, index) => {
+                // Calculate position in a grid
+                const cols = 3;
+                const row = Math.floor(index / cols);
+                const col = index % cols;
+                
+                visNodes.add({
+                    id: node.name,
+                    label: node.name,
+                    x: col * 200,
+                    y: row * 150,
+                    color: {
+                        background: node.color || '#3498db',
+                        border: node.status_led === 'green' ? '#27ae60' : 
+                               node.status_led === 'yellow' ? '#f39c12' :
+                               node.status_led === 'red' ? '#e74c3c' : '#95a5a6',
+                        highlight: {
+                            background: node.color || '#3498db',
+                            border: '#2c3e50'
+                        }
+                    },
+                    borderWidth: 3,
+                    shape: 'box',
+                    font: {
+                        color: 'white',
+                        size: 14,
+                        bold: true
+                    }
+                });
+                
+                // Add edges based on topic connections
+                node.topics_sub?.forEach(subTopic => {
+                    Object.values(nodes).forEach(otherNode => {
+                        if (otherNode.topics_pub?.includes(subTopic)) {
+                            visEdges.add({
+                                from: otherNode.name,
+                                to: node.name,
+                                label: subTopic,
+                                arrows: 'to',
+                                color: '#34495e',
+                                font: {
+                                    size: 10,
+                                    color: '#7f8c8d',
+                                    strokeWidth: 3,
+                                    strokeColor: 'white'
+                                }
+                            });
+                        }
+                    });
+                });
+            });
+            
+            const data = {
+                nodes: visNodes,
+                edges: visEdges
+            };
+            
+            const options = {
+                physics: {
+                    enabled: false
+                },
+                interaction: {
+                    hover: true
+                },
+                nodes: {
+                    shadow: true
+                },
+                edges: {
+                    smooth: {
+                        type: 'cubicBezier',
+                        roundness: 0.4
+                    }
+                }
+            };
+            
+            network = new vis.Network(container, data, options);
+            
+            // Handle node clicks
+            network.on('click', function(params) {
+                if (params.nodes.length > 0) {
+                    const nodeId = params.nodes[0];
+                    showNodeLogs(nodeId);
+                }
+            });
+        }
+        
+        // Update node statuses
+        function updateNodeStatuses(statusData) {
+            Object.keys(statusData).forEach(nodeName => {
+                if (nodes[nodeName]) {
+                    Object.assign(nodes[nodeName], statusData[nodeName]);
+                }
+            });
+            renderNodeList();
+            updatePipelineColors();
+        }
+        
+        // Update pipeline colors based on status
+        function updatePipelineColors() {
+            if (!network) return;
+            
+            Object.values(nodes).forEach(node => {
+                network.body.data.nodes.update({
+                    id: node.name,
+                    color: {
+                        border: node.status_led === 'green' ? '#27ae60' : 
+                               node.status_led === 'yellow' ? '#f39c12' :
+                               node.status_led === 'red' ? '#e74c3c' : '#95a5a6'
+                    }
+                });
+            });
+        }
+        
+        // Start a specific node
+        async function startNode(nodeName) {
+            try {
+                const response = await fetch(`/api/node/${nodeName}/start`, {
+                    method: 'POST'
+                });
+                const result = await response.json();
+                if (result.success) {
+                    console.log(`Started node: ${nodeName}`);
+                }
+                loadNodes();
+            } catch (error) {
+                console.error(`Failed to start node ${nodeName}:`, error);
+            }
+        }
+        
+        // Stop a specific node
+        async function stopNode(nodeName) {
+            try {
+                const response = await fetch(`/api/node/${nodeName}/stop`, {
+                    method: 'POST'
+                });
+                const result = await response.json();
+                if (result.success) {
+                    console.log(`Stopped node: ${nodeName}`);
+                }
+                loadNodes();
+            } catch (error) {
+                console.error(`Failed to stop node ${nodeName}:`, error);
+            }
+        }
+        
+        // Start all nodes in the correct order
+        async function startAll() {
+            // Define launch order
+            const launchOrder = [
+                'multi_sensor',
+                'vehicle_description', 
+                'vesc_driver',
+                'camera_perception',
+                'slam',
+                'path_planning',
+                'psd_mpc'
+            ];
+            
+            console.log(`Starting ${launchOrder.length} nodes in order...`);
+            
+            for (const nodeName of launchOrder) {
+                if (nodes[nodeName]) {
+                    console.log(`Starting ${nodeName}...`);
+                    await startNode(nodeName);
+                    await new Promise(resolve => setTimeout(resolve, 1500)); // 1.5 second delay between starts
+                }
+            }
+            
+            console.log('All nodes start command sent');
+        }
+        
+        // Stop all nodes with graceful shutdown in reverse order
+        async function stopAll() {
+            // Stop in reverse launch order
+            const stopOrder = [
+                'psd_mpc',
+                'path_planning',
+                'slam',
+                'camera_perception',
+                'vesc_driver',
+                'vehicle_description',
+                'multi_sensor'
+            ];
+            
+            console.log(`Stopping ${stopOrder.length} nodes in reverse order...`);
+            
+            for (const nodeName of stopOrder) {
+                if (nodes[nodeName]) {
+                    console.log(`Stopping ${nodeName}...`);
+                    await stopNode(nodeName);
+                    await new Promise(resolve => setTimeout(resolve, 500)); // 0.5 second delay for graceful shutdown
+                }
+            }
+            
+            console.log('All nodes stop command sent');
+        }
+        
+        // Show node logs
+        async function showNodeLogs(nodeName) {
+            currentLogNode = nodeName;
+            document.getElementById('log-title').textContent = `${nodeName} Logs`;
+            document.getElementById('overlay').classList.add('active');
+            document.getElementById('log-viewer').classList.add('active');
+            
+            // Load existing logs
+            try {
+                const response = await fetch(`/api/node/${nodeName}/logs?tail=200`);
+                const logs = await response.json();
+                const logContent = document.getElementById('log-content');
+                logContent.innerHTML = '';
+                logs.forEach(log => appendLog(log));
+                logContent.scrollTop = logContent.scrollHeight;
+            } catch (error) {
+                console.error('Failed to load logs:', error);
+            }
+            
+            // Subscribe to real-time logs
+            socket.emit('subscribe_logs', { node_name: nodeName });
+        }
+        
+        // Append log to viewer
+        function appendLog(log) {
+            const logContent = document.getElementById('log-content');
+            const logLine = document.createElement('div');
+            logLine.className = 'log-line';
+            
+            const message = log.message || '';
+            if (message.toLowerCase().includes('error') || message.toLowerCase().includes('fatal')) {
+                logLine.classList.add('error');
+            } else if (message.toLowerCase().includes('warning') || message.toLowerCase().includes('warn')) {
+                logLine.classList.add('warning');
+            } else if (message.toLowerCase().includes('info')) {
+                logLine.classList.add('info');
+            }
+            
+            const timestamp = new Date(log.timestamp).toLocaleTimeString();
+            logLine.textContent = `[${timestamp}] ${message}`;
+            logContent.appendChild(logLine);
+            
+            // Auto-scroll to bottom
+            logContent.scrollTop = logContent.scrollHeight;
+            
+            // Limit number of log lines
+            while (logContent.children.length > 500) {
+                logContent.removeChild(logContent.firstChild);
+            }
+        }
+        
+        // Close log viewer
+        function closeLogViewer() {
+            currentLogNode = null;
+            document.getElementById('overlay').classList.remove('active');
+            document.getElementById('log-viewer').classList.remove('active');
+        }
+        
+        // Load topic information periodically
+        async function loadTopics() {
+            try {
+                const response = await fetch('/api/topics');
+                const topics = await response.json();
+                topicInfo = {};
+                topics.forEach(topic => {
+                    topicInfo[topic.name] = topic;
+                });
+            } catch (error) {
+                console.error('Failed to load topics:', error);
+            }
+        }
+        
+        // Initial load
+        loadNodes();
+        loadTopics();
+        
+        // Refresh periodically
+        setInterval(loadNodes, 2000);
+        setInterval(loadTopics, 1000);  // Update topics more frequently for better frequency display
+    </script>
+</body>
+</html>
