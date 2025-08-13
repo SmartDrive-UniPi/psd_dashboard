@@ -32,9 +32,21 @@
             align-items: center;
         }
         
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        
+        .logo {
+            height: 40px;
+            width: auto;
+        }
+        
         .header h1 {
             font-size: 24px;
             color: #333;
+            margin: 0;
         }
         
         .control-buttons {
@@ -387,7 +399,10 @@
 </head>
 <body>
     <div class="header">
-        <h1>SmartDrive Launch Dashboard</h1>
+        <div class="header-left">
+            <img src="logo_smartdrive.jpeg" alt="SmartDrive Logo" class="logo">
+            <h1>SmartDrive Launch Dashboard</h1>
+        </div>
         <div class="control-buttons">
             <button class="btn btn-start-all" onclick="startAll()">Start All Nodes</button>
             <button class="btn btn-stop-all" onclick="stopAll()">Stop All Nodes</button>
@@ -447,15 +462,53 @@
             try {
                 const response = await fetch('/api/nodes');
                 const nodeData = await response.json();
+                const oldNodes = { ...nodes };
                 nodes = {};
                 nodeData.forEach(node => {
                     nodes[node.name] = node;
                 });
                 renderNodeList();
-                renderPipeline();
+                
+                // Only render pipeline if it's the first time or nodes structure changed
+                if (!network || hasNodesStructureChanged(oldNodes, nodes)) {
+                    renderPipeline();
+                } else {
+                    updatePipelineColors();
+                }
             } catch (error) {
                 console.error('Failed to load nodes:', error);
             }
+        }
+        
+        // Check if the nodes structure has changed (new nodes, removed nodes, or topic changes)
+        function hasNodesStructureChanged(oldNodes, newNodes) {
+            const oldNodeNames = Object.keys(oldNodes);
+            const newNodeNames = Object.keys(newNodes);
+            
+            // Check if nodes were added or removed
+            if (oldNodeNames.length !== newNodeNames.length) {
+                return true;
+            }
+            
+            // Check if any node names changed
+            for (const nodeName of newNodeNames) {
+                if (!oldNodes[nodeName]) {
+                    return true;
+                }
+                
+                // Check if topics changed (which affects connections)
+                const oldTopicsPub = (oldNodes[nodeName].topics_pub || []).sort();
+                const newTopicsPub = (newNodes[nodeName].topics_pub || []).sort();
+                const oldTopicsSub = (oldNodes[nodeName].topics_sub || []).sort();
+                const newTopicsSub = (newNodes[nodeName].topics_sub || []).sort();
+                
+                if (JSON.stringify(oldTopicsPub) !== JSON.stringify(newTopicsPub) ||
+                    JSON.stringify(oldTopicsSub) !== JSON.stringify(newTopicsSub)) {
+                    return true;
+                }
+            }
+            
+            return false;
         }
         
         // Track topic information separately
@@ -577,17 +630,36 @@
             const visNodes = new vis.DataSet();
             const visEdges = new vis.DataSet();
             
+            // Define optimal positions for nodes to minimize overlaps and crossings
+            const nodePositions = {
+                // Layer 1: Data sources (top)
+                'multi_sensor': { x: -350, y: -200 },      // Top left - sensor data source
+                'camera_perception': { x: 350, y: -200 },   // Top right - camera processing
+                
+                // Layer 2: Core processing (upper middle)
+                'vehicle_description': { x: 0, y: -300 },   // Top center - TF provider
+                'slam': { x: 0, y: 0 },                     // Center - localization hub
+                
+                // Layer 3: Planning (middle)
+                'path_planning': { x: 250, y: 100 },       // Right - planning
+                
+                // Layer 4: Control (bottom)
+                'psd_mpc': { x: 0, y: 250 },               // Bottom center - control
+                'vesc_driver': { x: -250, y: 100 }         // Left - actuator
+            };
+            
             Object.values(nodes).forEach((node, index) => {
-                // Calculate position in a grid
-                const cols = 3;
-                const row = Math.floor(index / cols);
-                const col = index % cols;
+                // Use predefined positions or fall back to grid layout
+                const position = nodePositions[node.name] || {
+                    x: (index % 3) * 250 - 200,
+                    y: Math.floor(index / 3) * 200 - 100
+                };
                 
                 visNodes.add({
                     id: node.name,
                     label: node.name,
-                    x: col * 200,
-                    y: row * 150,
+                    x: position.x,
+                    y: position.y,
                     color: {
                         background: node.color || '#3498db',
                         border: node.status_led === 'green' ? '#27ae60' : 
@@ -604,27 +676,144 @@
                         color: 'white',
                         size: 14,
                         bold: true
-                    }
+                    },
+                    fixed: false,  // Allow manual positioning
+                    physics: false  // No physics for clean positioning
                 });
                 
-                // Add edges based on topic connections
-                node.topics_sub?.forEach(subTopic => {
-                    Object.values(nodes).forEach(otherNode => {
-                        if (otherNode.topics_pub?.includes(subTopic)) {
-                            visEdges.add({
-                                from: otherNode.name,
-                                to: node.name,
-                                label: subTopic,
-                                arrows: 'to',
-                                color: '#34495e',
-                                font: {
-                                    size: 10,
-                                    color: '#7f8c8d',
-                                    strokeWidth: 3,
-                                    strokeColor: 'white'
-                                }
-                            });
+            });
+            
+            // Create all topic connections by collecting them first, then handling overlaps
+            const connectionMap = new Map(); // Track connections between node pairs
+            
+            // Collect all topic connections
+            Object.values(nodes).forEach(subscriberNode => {
+                subscriberNode.topics_sub?.forEach(subTopic => {
+                    Object.values(nodes).forEach(publisherNode => {
+                        if (publisherNode.topics_pub?.includes(subTopic) && publisherNode.name !== subscriberNode.name) {
+                            const key = `${publisherNode.name}-${subscriberNode.name}`;
+                            const reverseKey = `${subscriberNode.name}-${publisherNode.name}`;
+                            
+                            if (!connectionMap.has(key)) {
+                                connectionMap.set(key, {
+                                    from: publisherNode.name,
+                                    to: subscriberNode.name,
+                                    topics: [],
+                                    hasReverse: connectionMap.has(reverseKey)
+                                });
+                            }
+                            
+                            const existingTopics = connectionMap.get(key).topics;
+                            const topicExists = existingTopics.some(t => t.name === subTopic);
+                            if (!topicExists) {
+                                connectionMap.get(key).topics.push({
+                                    name: subTopic,
+                                    publisher: publisherNode.name,
+                                    subscriber: subscriberNode.name
+                                });
+                            }
                         }
+                    });
+                });
+            });
+            
+            // Create clean curved edges with simple fan-out pattern
+            connectionMap.forEach((connection, key) => {
+                const totalTopics = connection.topics.length;
+                
+                // Process each topic as individual edge
+                connection.topics.forEach((topic, topicIndex) => {
+                    const topicLabel = topic.name.split('/').pop() || topic.name;
+                    
+                    // Choose edge color and width based on topic type
+                    let edgeColor = '#34495e';
+                    let edgeWidth = 2;
+                    
+                    if (topic.name.includes('image') || topic.name.includes('camera')) {
+                        edgeColor = '#e74c3c';
+                        edgeWidth = 3;
+                    } else if (topic.name.includes('point_cloud') || topic.name.includes('scan')) {
+                        edgeColor = '#3498db';
+                        edgeWidth = 3;
+                    } else if (topic.name.includes('pose') || topic.name.includes('odom')) {
+                        edgeColor = '#9b59b6';
+                        edgeWidth = 2;
+                    } else if (topic.name.includes('cmd_vel')) {
+                        edgeColor = '#e67e22';
+                        edgeWidth = 4;
+                    } else if (topic.name.includes('waypoints') || topic.name.includes('trajectory')) {
+                        edgeColor = '#1abc9c';
+                        edgeWidth = 2;
+                    } else if (topic.name.includes('tf')) {
+                        edgeColor = '#f39c12';
+                        edgeWidth = 1;
+                    }
+                    
+                    // Simple curve calculation for clean separation
+                    let smoothOptions = { enabled: false };
+                    
+                    if (totalTopics === 1) {
+                        // Single connection: slight curve
+                        smoothOptions = {
+                            enabled: true,
+                            type: 'cubicBezier',
+                            roundness: 0.1
+                        };
+                    } else if (totalTopics === 2) {
+                        // Two connections: symmetric curves
+                        smoothOptions = {
+                            enabled: true,
+                            type: 'cubicBezier',
+                            roundness: topicIndex === 0 ? 0.3 : -0.3
+                        };
+                    } else {
+                        // Multiple connections: evenly distributed curves
+                        const maxCurve = 0.6;
+                        const step = (2 * maxCurve) / (totalTopics - 1);
+                        const roundness = -maxCurve + (topicIndex * step);
+                        
+                        smoothOptions = {
+                            enabled: true,
+                            type: 'cubicBezier',
+                            roundness: roundness
+                        };
+                    }
+                    
+                    // Label positioning without overlap
+                    let vadjust = 0;
+                    if (totalTopics > 1) {
+                        vadjust = (topicIndex - (totalTopics - 1) / 2) * 20;
+                    }
+                    
+                    visEdges.add({
+                        id: `${connection.from}-${connection.to}-${topic.name}`,
+                        from: connection.from,
+                        to: connection.to,
+                        label: topicLabel,
+                        title: `Topic: ${topic.name}\nFrom: ${topic.publisher}\nTo: ${topic.subscriber}`,
+                        arrows: {
+                            to: {
+                                enabled: true,
+                                scaleFactor: 1.0,
+                                type: 'arrow'
+                            }
+                        },
+                        color: {
+                            color: edgeColor,
+                            highlight: '#2c3e50',
+                            hover: '#2c3e50'
+                        },
+                        width: edgeWidth,
+                        font: {
+                            size: 10,
+                            color: '#2c3e50',
+                            strokeWidth: 2,
+                            strokeColor: 'white',
+                            vadjust: vadjust,
+                            background: 'rgba(255,255,255,0.8)'
+                        },
+                        smooth: smoothOptions,
+                        physics: false
                     });
                 });
             });
@@ -639,20 +828,46 @@
                     enabled: false
                 },
                 interaction: {
-                    hover: true
+                    hover: true,
+                    dragNodes: true,
+                    dragView: true,
+                    zoomView: true
                 },
                 nodes: {
-                    shadow: true
+                    shadow: true,
+                    borderWidth: 3,
+                    margin: 15,
+                    chosen: {
+                        node: function(values, id, selected, hovering) {
+                            values.borderWidth = 5;
+                        }
+                    }
                 },
                 edges: {
                     smooth: {
-                        type: 'cubicBezier',
-                        roundness: 0.4
-                    }
+                        enabled: true,
+                        type: 'cubicBezier'
+                    },
+                    font: {
+                        size: 10,
+                        strokeWidth: 2,
+                        strokeColor: 'white'
+                    },
+                    arrowStrikethrough: false
                 }
             };
             
             network = new vis.Network(container, data, options);
+            
+            // Load saved positions if available
+            loadNodePositions();
+            
+            // Handle node drag events to save positions
+            network.on('dragEnd', function(params) {
+                if (params.nodes.length > 0) {
+                    saveNodePositions();
+                }
+            });
             
             // Handle node clicks
             network.on('click', function(params) {
@@ -663,15 +878,91 @@
             });
         }
         
+        // Save node positions to config file
+        async function saveNodePositions() {
+            if (!network) return;
+            
+            const positions = network.getPositions();
+            console.log('Saving node positions:', positions);
+            
+            try {
+                const response = await fetch('/api/save-positions', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(positions)
+                });
+                
+                if (response.ok) {
+                    console.log('Node positions saved successfully');
+                } else {
+                    console.error('Failed to save node positions');
+                }
+            } catch (error) {
+                console.error('Error saving node positions:', error);
+            }
+        }
+        
+        // Load node positions from config file
+        async function loadNodePositions() {
+            if (!network) return;
+            
+            try {
+                const response = await fetch('/api/load-positions');
+                if (response.ok) {
+                    const positions = await response.json();
+                    console.log('Loading saved positions:', positions);
+                    
+                    // Apply saved positions
+                    Object.keys(positions).forEach(nodeId => {
+                        if (positions[nodeId]) {
+                            network.moveNode(nodeId, positions[nodeId].x, positions[nodeId].y);
+                        }
+                    });
+                    
+                    console.log('Node positions loaded successfully');
+                } else {
+                    console.log('No saved positions found, using default layout');
+                }
+            } catch (error) {
+                console.error('Error loading node positions:', error);
+            }
+        }
+        
         // Update node statuses
         function updateNodeStatuses(statusData) {
+            let hasChanges = false;
             Object.keys(statusData).forEach(nodeName => {
                 if (nodes[nodeName]) {
+                    // Check if there are actual changes
+                    const oldStatus = {
+                        running: nodes[nodeName].running,
+                        status_led: nodes[nodeName].status_led,
+                        error_count: nodes[nodeName].error_count,
+                        warning_count: nodes[nodeName].warning_count
+                    };
+                    
                     Object.assign(nodes[nodeName], statusData[nodeName]);
+                    
+                    const newStatus = {
+                        running: nodes[nodeName].running,
+                        status_led: nodes[nodeName].status_led,
+                        error_count: nodes[nodeName].error_count,
+                        warning_count: nodes[nodeName].warning_count
+                    };
+                    
+                    if (JSON.stringify(oldStatus) !== JSON.stringify(newStatus)) {
+                        hasChanges = true;
+                    }
                 }
             });
-            renderNodeList();
-            updatePipelineColors();
+            
+            // Only update UI if there are actual changes
+            if (hasChanges) {
+                renderNodeList();
+                updatePipelineColors();
+            }
         }
         
         // Update pipeline colors based on status
@@ -699,8 +990,8 @@
                 const result = await response.json();
                 if (result.success) {
                     console.log(`Started node: ${nodeName}`);
+                    // Update will come through status update socket, no need to reload all nodes
                 }
-                loadNodes();
             } catch (error) {
                 console.error(`Failed to start node ${nodeName}:`, error);
             }
@@ -715,8 +1006,8 @@
                 const result = await response.json();
                 if (result.success) {
                     console.log(`Stopped node: ${nodeName}`);
+                    // Update will come through status update socket, no need to reload all nodes
                 }
-                loadNodes();
             } catch (error) {
                 console.error(`Failed to stop node ${nodeName}:`, error);
             }
@@ -741,7 +1032,7 @@
                 if (nodes[nodeName]) {
                     console.log(`Starting ${nodeName}...`);
                     await startNode(nodeName);
-                    await new Promise(resolve => setTimeout(resolve, 1500)); // 1.5 second delay between starts
+                    await new Promise(resolve => setTimeout(resolve, 800)); // Faster 0.8 second delay between starts
                 }
             }
             
@@ -767,7 +1058,7 @@
                 if (nodes[nodeName]) {
                     console.log(`Stopping ${nodeName}...`);
                     await stopNode(nodeName);
-                    await new Promise(resolve => setTimeout(resolve, 500)); // 0.5 second delay for graceful shutdown
+                    await new Promise(resolve => setTimeout(resolve, 300)); // Faster 0.3 second delay for quicker shutdown
                 }
             }
             
@@ -850,9 +1141,9 @@
         loadNodes();
         loadTopics();
         
-        // Refresh periodically
-        setInterval(loadNodes, 2000);
-        setInterval(loadTopics, 1000);  // Update topics more frequently for better frequency display
+        // Refresh periodically with faster updates for better responsiveness
+        setInterval(loadNodes, 3000);   // Reload structure every 3 seconds for snappier updates
+        setInterval(loadTopics, 500);   // Update topics every 500ms for real-time feel
     </script>
 </body>
 </html>

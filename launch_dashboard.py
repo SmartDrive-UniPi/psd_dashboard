@@ -245,7 +245,7 @@ class ProcessManager:
             except Exception as e:
                 print(f"Error updating topic info: {e}")
                 
-            time.sleep(2)  # Check every 2 seconds
+            time.sleep(1)  # Check every second for faster topic updates
             
     def _parse_topic_list(self, output: str):
         """Parse ros2 topic list -v output"""
@@ -538,6 +538,41 @@ def index():
     """Serve the main dashboard page"""
     return render_template('dashboard.html')
 
+@app.route('/logo_smartdrive.jpeg')
+def serve_logo():
+    """Serve the logo image"""
+    from flask import send_from_directory
+    return send_from_directory('templates', 'logo_smartdrive.jpeg')
+
+@app.route('/api/save-positions', methods=['POST'])
+def save_positions():
+    """Save node positions to config file"""
+    try:
+        positions = request.get_json()
+        config_path = os.path.join(os.path.dirname(__file__), 'node_positions.json')
+        
+        with open(config_path, 'w') as f:
+            json.dump(positions, f, indent=2)
+        
+        return jsonify({'success': True, 'message': 'Positions saved successfully'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/load-positions')
+def load_positions():
+    """Load node positions from config file"""
+    try:
+        config_path = os.path.join(os.path.dirname(__file__), 'node_positions.json')
+        
+        if os.path.exists(config_path):
+            with open(config_path, 'r') as f:
+                positions = json.load(f)
+            return jsonify(positions)
+        else:
+            return jsonify({}), 404
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/nodes')
 def get_nodes():
     """Get all node configurations and status"""
@@ -647,7 +682,7 @@ def send_logs_to_client(node_name: str, client_id: str):
 def broadcast_status_updates():
     """Broadcast node status updates to all clients"""
     while not process_manager.shutdown_event.is_set():
-        time.sleep(1)
+        time.sleep(0.5)  # Faster 500ms updates for snappier response
         
         # Update LED statuses
         for node_name in process_manager.node_configs:
@@ -684,16 +719,17 @@ def setup_nodes():
             name="vehicle_description",
             command="ros2 launch psd_vehicle_description view_psd_vehicle.launch.py",
             topics_pub=["/tf", "/tf_static"],
+            topics_sub=[],
             color="#f39c12",
             position=(100, 200)
         ),
-        # 3. VESC driver (motor control) - no specific topics mentioned
+        # 3. VESC driver (motor control)
         NodeConfig(
             name="vesc_driver",
             command="ros2 launch vesc_driver vesc_driver_node.launch.py",
-            topics_pub=[],  # No specific topics mentioned
+            topics_pub=["/odom", "/vesc/sensors/core", "/vesc/status"],
             topics_sub=["/cmd_vel"],
-            expected_freq={},
+            expected_freq={"/odom": 50, "/vesc/sensors/core": 50, "/vesc/status": 10},
             color="#2ecc71",
             position=(300, 100)
         ),
@@ -709,6 +745,7 @@ def setup_nodes():
                 -p centroid_mode:=2 \
                 -p filter:=false""",
             topics_pub=["/detected_bb", "/possible_cones_xyz"],
+            topics_sub=["/zed/zed_node/left/image_rect_color", "/zed/zed_node/point_cloud/cloud_registered", "/tf"],
             expected_freq={"/detected_bb": 30, "/possible_cones_xyz": 30},
             color="#e74c3c",
             position=(500, 100)
@@ -717,9 +754,9 @@ def setup_nodes():
         NodeConfig(
             name="slam",
             command="ros2 launch psd_slam graph_slam.launch.py",
-            topics_pub=["/vehicle_pose"],
-            topics_sub=["/scan", "/imu/data"],
-            expected_freq={"/vehicle_pose": 10},
+            topics_pub=["/vehicle_pose", "/map"],
+            topics_sub=["/scan", "/imu/data", "/tf", "/odom", "/vesc/status"],
+            expected_freq={"/vehicle_pose": 10, "/map": 1},
             color="#9b59b6",
             position=(300, 300)
         ),
@@ -727,9 +764,9 @@ def setup_nodes():
         NodeConfig(
             name="path_planning",
             command="ros2 run psd_path_planning exploration_standalone",
-            topics_pub=["/trajectory_waypoints"],
-            topics_sub=["/vehicle_pose", "/possible_cones_xyz"],
-            expected_freq={"/trajectory_waypoints": 5},
+            topics_pub=["/trajectory_waypoints", "/path"],
+            topics_sub=["/vehicle_pose", "/possible_cones_xyz", "/map", "/tf"],
+            expected_freq={"/trajectory_waypoints": 5, "/path": 2},
             color="#1abc9c",
             position=(500, 300)
         ),
@@ -738,7 +775,7 @@ def setup_nodes():
             name="psd_mpc",
             command="ros2 launch psd_mpc acados_mpc.launch.py",
             topics_pub=["/cmd_vel"],
-            topics_sub=["/vehicle_pose", "/trajectory_waypoints"],
+            topics_sub=["/vehicle_pose", "/trajectory_waypoints", "/odom"],
             expected_freq={"/cmd_vel": 20},
             color="#e67e22",
             position=(700, 200)
