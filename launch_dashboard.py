@@ -741,17 +741,17 @@ def setup_nodes():
                 -p filter:=false""",
             topics_pub=["/detected_bb", "/possible_cones_xyz"],
             topics_sub=["/zed/zed_node/left/image_rect_color", "/zed/zed_node/point_cloud/cloud_registered"],
-            expected_freq={"/detected_bb": 30, "/possible_cones_xyz": 30},
+            expected_freq={"/detected_bb": 15, "/possible_cones_xyz": 15},
             color="#e74c3c",
             position=(500, 100)
         ),
         # 5. SLAM
         NodeConfig(
             name="slam",
-            command="ros2 launch psd_slam graph_slam.launch.py",
-            topics_pub=["/vehicle_pose"],
-            topics_sub=["/scan", "/imu/data"],
-            expected_freq={"/vehicle_pose": 10},
+            command="ros2 run psd_slam psd_slam_node",
+            topics_pub=["/slam/pose", "/slam/path", "/slam/map", "/slam/track_limits", "/slam/track_boundaries_viz", "/slam/graph"],
+            topics_sub=["/imu/data", "/possible_cones_xyz"],
+            expected_freq={"/slam/pose": 10, "/slam/path": 10, "/slam/map": 5},
             color="#9b59b6",
             position=(300, 300)
         ),
@@ -760,8 +760,8 @@ def setup_nodes():
             name="path_planning",
             command="ros2 run psd_path_planning exploration_standalone",
             topics_pub=["/trajectory_waypoints"],
-            topics_sub=["/vehicle_pose", "/possible_cones_xyz"],
-            expected_freq={"/trajectory_waypoints": 5},
+            topics_sub=["/slam/pose", "/possible_cones_xyz"],
+            expected_freq={"/trajectory_waypoints": 100},
             color="#1abc9c",
             position=(500, 300)
         ),
@@ -770,8 +770,8 @@ def setup_nodes():
             name="psd_mpc",
             command="ros2 launch psd_mpc acados_mpc.launch.py",
             topics_pub=["/cmd_vel"],
-            topics_sub=["/vehicle_pose", "/trajectory_waypoints"],
-            expected_freq={"/cmd_vel": 20},
+            topics_sub=["/slam/pose", "/trajectory_waypoints"],
+            expected_freq={"/cmd_vel": 50},
             color="#e67e22",
             position=(700, 200)
         )

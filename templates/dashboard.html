@@ -667,10 +667,17 @@
         // Get friendly display name for topics
         function getTopicDisplayName(topicName) {
             const topicMap = {
-                '/imu/data': 'data',
+                '/imu/data': 'imu_data',
                 '/zed/zed_node/point_cloud/cloud_registered': 'zed_pcl',
                 '/zed/zed_node/left/image_rect_color': 'zed_img',
-                // Add more mappings as needed
+                // SLAM topics
+                '/slam/pose': 'slam_pose',
+                '/slam/path': 'slam_path',
+                '/slam/map': 'slam_map',
+                '/slam/track_limits': 'track_limits',
+                '/slam/track_boundaries_viz': 'track_viz',
+                '/slam/graph': 'slam_graph',
+                // Other topics
                 '/scan': 'scan',
                 '/vehicle_pose': 'vehicle_pose',
                 '/possible_cones_xyz': 'cones_xyz',
