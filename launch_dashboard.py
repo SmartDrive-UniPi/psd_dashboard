@@ -39,7 +39,7 @@ class NodeConfig:
     topics_sub: List[str] = field(default_factory=list)
     expected_freq: Dict[str, float] = field(default_factory=dict)
     color: str = "#3498db"
-    position: Tuple[int, int] = (0, 0)
+    position: Tuple[float, float] = (0.0, 0.0)
 
 @dataclass
 class NodeStatus:
@@ -613,6 +613,37 @@ def get_node_logs(node_name):
     logs = process_manager.get_node_logs(node_name, tail)
     return jsonify(logs)
 
+@app.route('/api/save_positions', methods=['POST'])
+def save_positions():
+    """Save node positions to config file"""
+    try:
+        positions = request.json
+        if not positions:
+            return jsonify({'error': 'No position data provided'}), 400
+            
+        # Save positions to a config file
+        config_path = os.path.join(os.path.dirname(__file__), 'node_positions.json')
+        with open(config_path, 'w') as f:
+            json.dump(positions, f, indent=2)
+            
+        return jsonify({'success': True, 'message': f'Positions saved to {config_path}'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/load_positions')
+def load_positions():
+    """Load node positions from config file"""
+    try:
+        config_path = os.path.join(os.path.dirname(__file__), 'node_positions.json')
+        if os.path.exists(config_path):
+            with open(config_path, 'r') as f:
+                positions = json.load(f)
+            return jsonify(positions)
+        else:
+            return jsonify({})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 @socketio.on('connect')
 def handle_connect():
     """Handle client connection"""
@@ -687,13 +718,13 @@ def setup_nodes():
             color="#f39c12",
             position=(100, 200)
         ),
-        # 3. VESC driver (motor control) - no specific topics mentioned
+        # 3. VESC driver (motor control)
         NodeConfig(
             name="vesc_driver",
             command="ros2 launch vesc_driver vesc_driver_node.launch.py",
-            topics_pub=[],  # No specific topics mentioned
+            topics_pub=["/vesc/core"],  # VESC publishes vehicle state/odom info
             topics_sub=["/cmd_vel"],
-            expected_freq={},
+            expected_freq={"/vesc/core": 50},  # High frequency vehicle state
             color="#2ecc71",
             position=(300, 100)
         ),
@@ -709,6 +740,7 @@ def setup_nodes():
                 -p centroid_mode:=2 \
                 -p filter:=false""",
             topics_pub=["/detected_bb", "/possible_cones_xyz"],
+            topics_sub=["/zed/zed_node/left/image_rect_color", "/zed/zed_node/point_cloud/cloud_registered"],
             expected_freq={"/detected_bb": 30, "/possible_cones_xyz": 30},
             color="#e74c3c",
             position=(500, 100)

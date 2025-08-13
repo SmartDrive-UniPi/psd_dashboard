@@ -383,6 +383,75 @@
             padding: 3px 0;
             color: #34495e;
         }
+        
+        /* Enhanced visualization styles */
+        .graph-controls {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(255, 255, 255, 0.9);
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        .graph-controls button {
+            margin: 2px;
+            padding: 5px 10px;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        
+        .btn-reset-positions {
+            background: #3498db;
+            color: white;
+        }
+        
+        .btn-reset-positions:hover {
+            background: #2980b9;
+        }
+        
+        .btn-toggle-labels {
+            background: #9b59b6;
+            color: white;
+        }
+        
+        .btn-toggle-labels:hover {
+            background: #8e44ad;
+        }
+        
+        /* Legend */
+        .graph-legend {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            background: rgba(255, 255, 255, 0.9);
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            font-size: 12px;
+        }
+        
+        .legend-item {
+            display: flex;
+            align-items: center;
+            margin-bottom: 5px;
+        }
+        
+        .legend-color {
+            width: 20px;
+            height: 3px;
+            margin-right: 8px;
+            border-radius: 1px;
+        }
+        
+        .legend-color.good { background: #27ae60; }
+        .legend-color.warning { background: #f39c12; }
+        .legend-color.low { background: #e74c3c; }
+        .legend-color.active { background: #3498db; }
+        .legend-color.inactive { background: #34495e; }
     </style>
 </head>
 <body>
@@ -397,6 +466,32 @@
     <div class="main-container">
         <div class="pipeline-view">
             <div id="pipeline-canvas" class="pipeline-canvas"></div>
+            <div class="graph-controls">
+                <button class="btn-reset-positions" onclick="resetAllPositions()">Reset Layout</button>
+                <button class="btn-toggle-labels" onclick="toggleEdgeLabels()">Toggle Labels</button>
+            </div>
+            <div class="graph-legend">
+                <div class="legend-item">
+                    <div class="legend-color good"></div>
+                    <span>Good frequency (≥80% expected)</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color warning"></div>
+                    <span>Low frequency (50-80% expected)</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color low"></div>
+                    <span>Very low frequency (&lt;50% expected)</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color active"></div>
+                    <span>Active topic (no expected frequency)</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color inactive"></div>
+                    <span>Inactive topic</span>
+                </div>
+            </div>
         </div>
         
         <div class="node-list" id="node-list">
@@ -452,7 +547,7 @@
                     nodes[node.name] = node;
                 });
                 renderNodeList();
-                renderPipeline();
+                await renderPipeline();
             } catch (error) {
                 console.error('Failed to load nodes:', error);
             }
@@ -496,7 +591,7 @@
                             ` (${publishers.length} publishers: ${publishers.join(', ')})` : '';
                         
                         return `<span class="topic-badge" title="${topic}${pubInfo}">
-                            ${topic.split('/').pop()}
+                            ${getTopicDisplayName(topic)}
                             <span class="${freqClass}">${freq.toFixed(1)}/${expectedFreq}Hz</span>
                         </span>`;
                     }).join('');
@@ -569,25 +664,103 @@
             return 0.0;
         }
         
-        // Render pipeline visualization
-        function renderPipeline() {
+        // Get friendly display name for topics
+        function getTopicDisplayName(topicName) {
+            const topicMap = {
+                '/imu/data': 'data',
+                '/zed/zed_node/point_cloud/cloud_registered': 'zed_pcl',
+                '/zed/zed_node/left/image_rect_color': 'zed_img',
+                // Add more mappings as needed
+                '/scan': 'scan',
+                '/vehicle_pose': 'vehicle_pose',
+                '/possible_cones_xyz': 'cones_xyz',
+                '/trajectory_waypoints': 'waypoints',
+                '/cmd_vel': 'cmd_vel',
+                '/tf': 'tf',
+                '/tf_static': 'tf_static',
+                '/detected_bb': 'detected_bb',
+                '/vesc/core': 'vesc_core'
+            };
+            
+            // Return mapped name or fallback to last part of topic path
+            return topicMap[topicName] || topicName.split('/').pop();
+        }
+        
+        // Load and save node positions
+        async function loadNodePositions() {
+            try {
+                // First try to load from backend
+                const response = await fetch('/api/load_positions');
+                if (response.ok) {
+                    const backendPositions = await response.json();
+                    if (Object.keys(backendPositions).length > 0) {
+                        return backendPositions;
+                    }
+                }
+            } catch (err) {
+                console.warn('Could not load positions from backend:', err);
+            }
+            
+            // Fallback to localStorage
+            const saved = localStorage.getItem('dashboardNodePositions');
+            return saved ? JSON.parse(saved) : {};
+        }
+        
+        function saveNodePositions() {
+            if (!network) return;
+            
+            const positions = network.getPositions();
+            const positionData = {};
+            
+            Object.keys(positions).forEach(nodeId => {
+                positionData[nodeId] = {
+                    x: positions[nodeId].x,
+                    y: positions[nodeId].y
+                };
+            });
+            
+            localStorage.setItem('dashboardNodePositions', JSON.stringify(positionData));
+            
+            // Also save to backend
+            fetch('/api/save_positions', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(positionData)
+            }).catch(err => console.warn('Could not save positions to backend:', err));
+        }
+
+        // Render pipeline visualization with enhanced topic connections
+        async function renderPipeline() {
             const container = document.getElementById('pipeline-canvas');
             
             // Create nodes for visualization
             const visNodes = new vis.DataSet();
             const visEdges = new vis.DataSet();
             
+            const savedPositions = await loadNodePositions();
+            
             Object.values(nodes).forEach((node, index) => {
-                // Calculate position in a grid
-                const cols = 3;
-                const row = Math.floor(index / cols);
-                const col = index % cols;
+                // Use saved position or default grid position
+                let x, y;
+                if (savedPositions[node.name]) {
+                    x = savedPositions[node.name].x;
+                    y = savedPositions[node.name].y;
+                } else {
+                    // Calculate position in a grid as fallback
+                    const cols = 3;
+                    const row = Math.floor(index / cols);
+                    const col = index % cols;
+                    x = col * 200;
+                    y = row * 150;
+                }
                 
                 visNodes.add({
                     id: node.name,
                     label: node.name,
-                    x: col * 200,
-                    y: row * 150,
+                    x: x,
+                    y: y,
                     color: {
                         background: node.color || '#3498db',
                         border: node.status_led === 'green' ? '#27ae60' : 
@@ -606,26 +779,111 @@
                         bold: true
                     }
                 });
-                
-                // Add edges based on topic connections
+            });
+            
+            // Create enhanced edges based on all topic connections
+            const processedEdges = new Set(); // Avoid duplicate edges
+            const nodeConnections = {}; // Track connections between node pairs
+            
+            // First pass: identify all connections between node pairs
+            Object.values(nodes).forEach(node => {
                 node.topics_sub?.forEach(subTopic => {
                     Object.values(nodes).forEach(otherNode => {
                         if (otherNode.topics_pub?.includes(subTopic)) {
-                            visEdges.add({
-                                from: otherNode.name,
-                                to: node.name,
-                                label: subTopic,
-                                arrows: 'to',
-                                color: '#34495e',
-                                font: {
-                                    size: 10,
-                                    color: '#7f8c8d',
-                                    strokeWidth: 3,
-                                    strokeColor: 'white'
-                                }
+                            const connectionKey = `${otherNode.name}->${node.name}`;
+                            if (!nodeConnections[connectionKey]) {
+                                nodeConnections[connectionKey] = [];
+                            }
+                            nodeConnections[connectionKey].push({
+                                topic: subTopic,
+                                publisher: otherNode,
+                                subscriber: node
                             });
                         }
                     });
+                });
+            });
+            
+            // Second pass: create edges with appropriate curves for multiple connections
+            Object.entries(nodeConnections).forEach(([connectionKey, topics]) => {
+                topics.forEach((topicConnection, index) => {
+                    const { topic: subTopic, publisher: otherNode, subscriber: node } = topicConnection;
+                    const edgeId = `${otherNode.name}->${node.name}-${subTopic}`;
+                    
+                    if (!processedEdges.has(edgeId)) {
+                        processedEdges.add(edgeId);
+                        
+                        // Get topic frequency for color coding
+                        const freq = getCachedFrequency(subTopic, otherNode.topic_frequencies);
+                        const expectedFreq = otherNode.expected_freq[subTopic] || 0;
+                        
+                        let edgeColor = '#34495e';
+                        let edgeWidth = 2;
+                        
+                        if (freq > 0) {
+                            edgeWidth = 3;
+                            if (expectedFreq > 0) {
+                                const ratio = freq / expectedFreq;
+                                if (ratio >= 0.8) {
+                                    edgeColor = '#27ae60'; // Good frequency
+                                } else if (ratio >= 0.5) {
+                                    edgeColor = '#f39c12'; // Warning frequency
+                                } else {
+                                    edgeColor = '#e74c3c'; // Low frequency
+                                }
+                            } else {
+                                edgeColor = '#3498db'; // Active but no expected frequency
+                            }
+                        }
+                        
+                        const topicLabel = getTopicDisplayName(subTopic); // Use friendly display name
+                        
+                        // Calculate curve parameters for multiple edges between same nodes
+                        const totalEdges = topics.length;
+                        let smooth = { type: 'curvedCW', roundness: 0.1 };
+                        
+                        if (totalEdges > 1) {
+                            // Distribute curves with more pronounced separation
+                            const baseRoundness = 0.2;
+                            const roundnessStep = 0.4 / Math.max(1, totalEdges - 1);
+                            let roundness = baseRoundness + (index * roundnessStep);
+                            
+                            // For more than 2 edges, use more aggressive separation
+                            if (totalEdges > 2) {
+                                roundness += 0.1 * index;
+                            }
+                            
+                            // Alternate curve direction for better separation
+                            const curveType = index % 2 === 0 ? 'curvedCW' : 'curvedCCW';
+                            smooth = {
+                                type: curveType,
+                                roundness: Math.min(roundness, 0.8) // Cap at 0.8 to avoid extreme curves
+                            };
+                        }
+                        
+                        visEdges.add(storeOriginalLabel({
+                            id: edgeId,
+                            from: otherNode.name,
+                            to: node.name,
+                            label: showEdgeLabels ? topicLabel : '',
+                            originalLabel: topicLabel,
+                            arrows: 'to',
+                            color: {
+                                color: edgeColor,
+                                highlight: '#2c3e50'
+                            },
+                            width: edgeWidth,
+                            font: {
+                                size: 10,
+                                color: '#2c3e50',
+                                strokeWidth: 2,
+                                strokeColor: 'white',
+                                background: 'rgba(255,255,255,0.8)'
+                            },
+                            title: `Topic: ${subTopic}\nFrequency: ${freq.toFixed(1)}Hz${expectedFreq ? ` (expected: ${expectedFreq}Hz)` : ''}\n${totalEdges > 1 ? `(${index + 1}/${totalEdges} topics between these nodes)` : ''}`,
+                            smooth: smooth
+                        }));
+                    }
                 });
             });
             
@@ -636,19 +894,48 @@
             
             const options = {
                 physics: {
-                    enabled: false
+                    enabled: false // Disable physics to keep manual positions
                 },
                 interaction: {
-                    hover: true
+                    hover: true,
+                    dragNodes: true, // Enable node dragging
+                    selectConnectedEdges: false
                 },
                 nodes: {
-                    shadow: true
+                    shadow: {
+                        enabled: true,
+                        color: 'rgba(0,0,0,0.2)',
+                        size: 5,
+                        x: 3,
+                        y: 3
+                    },
+                    chosen: {
+                        node: function(values, id, selected, hovering) {
+                            values.shadow = true;
+                            values.shadowColor = 'rgba(0,0,0,0.3)';
+                            values.shadowSize = 8;
+                        }
+                    }
                 },
                 edges: {
                     smooth: {
-                        type: 'cubicBezier',
-                        roundness: 0.4
+                        enabled: true,
+                        type: 'dynamic'
+                    },
+                    chosen: {
+                        edge: function(values, id, selected, hovering) {
+                            values.width = values.width + 1;
+                        }
+                    },
+                    arrows: {
+                        to: {
+                            enabled: true,
+                            scaleFactor: 0.8
+                        }
                     }
+                },
+                layout: {
+                    improvedLayout: false // Don't auto-arrange nodes
                 }
             };
             
@@ -659,6 +946,31 @@
                 if (params.nodes.length > 0) {
                     const nodeId = params.nodes[0];
                     showNodeLogs(nodeId);
+                }
+            });
+            
+            // Save positions when nodes are moved
+            network.on('dragEnd', function(params) {
+                if (params.nodes.length > 0) {
+                    saveNodePositions();
+                }
+            });
+            
+            // Add context menu for position reset
+            network.on('oncontext', function(params) {
+                params.event.preventDefault();
+                if (params.nodes.length > 0) {
+                    const nodeId = params.nodes[0];
+                    if (confirm(`Reset position for ${nodeId}?`)) {
+                        // Reset to grid position
+                        const nodeIndex = Object.keys(nodes).indexOf(nodeId);
+                        const cols = 3;
+                        const row = Math.floor(nodeIndex / cols);
+                        const col = nodeIndex % cols;
+                        
+                        network.moveNode(nodeId, col * 200, row * 150);
+                        saveNodePositions();
+                    }
                 }
             });
         }
@@ -847,8 +1159,54 @@
         }
         
         // Initial load
-        loadNodes();
-        loadTopics();
+        async function initialize() {
+            await loadNodes();
+            await loadTopics();
+        }
+        
+        initialize();
+        
+        // Graph control functions
+        function resetAllPositions() {
+            if (!network) return;
+            
+            if (confirm('Reset all node positions to default grid layout?')) {
+                const nodeIds = Object.keys(nodes);
+                const cols = 3;
+                
+                nodeIds.forEach((nodeId, index) => {
+                    const row = Math.floor(index / cols);
+                    const col = index % cols;
+                    network.moveNode(nodeId, col * 200, row * 150);
+                });
+                
+                saveNodePositions();
+            }
+        }
+        
+        let showEdgeLabels = true;
+        function toggleEdgeLabels() {
+            if (!network) return;
+            
+            showEdgeLabels = !showEdgeLabels;
+            
+            // Update all edges
+            const edges = network.body.data.edges.get();
+            edges.forEach(edge => {
+                network.body.data.edges.update({
+                    id: edge.id,
+                    label: showEdgeLabels ? edge.originalLabel || edge.label : ''
+                });
+            });
+        }
+        
+        // Store original labels when creating edges
+        function storeOriginalLabel(edge) {
+            if (!edge.originalLabel) {
+                edge.originalLabel = edge.label;
+            }
+            return edge;
+        }
         
         // Refresh periodically
         setInterval(loadNodes, 2000);

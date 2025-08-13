@@ -1,0 +1,30 @@
+{
+  "multi_sensor": {
+    "x": 206,
+    "y": -182
+  },
+  "vehicle_description": {
+    "x": 183,
+    "y": -242
+  },
+  "vesc_driver": {
+    "x": 206,
+    "y": 438
+  },
+  "camera_perception": {
+    "x": 447,
+    "y": 17
+  },
+  "slam": {
+    "x": 117,
+    "y": 13
+  },
+  "path_planning": {
+    "x": 400,
+    "y": 150
+  },
+  "psd_mpc": {
+    "x": 228,
+    "y": 310
+  }
+}
