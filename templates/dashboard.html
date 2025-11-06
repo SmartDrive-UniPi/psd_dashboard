@@ -70,6 +70,48 @@
         .btn-stop-all:hover {
             background: #c0392b;
         }
+
+        .btn-record {
+            background: #e91e63;
+            color: white;
+        }
+
+        .btn-record:hover {
+            background: #c2185b;
+        }
+
+        .btn-record.recording {
+            background: #ff5252;
+            animation: recordPulse 1.5s ease-in-out infinite;
+        }
+
+        @keyframes recordPulse {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.7;
+            }
+        }
+
+        .record-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #ff5252;
+            margin-right: 5px;
+            animation: recordBlink 1s ease-in-out infinite;
+        }
+
+        @keyframes recordBlink {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.3;
+            }
+        }
         
         .main-container {
             flex: 1;
@@ -460,6 +502,10 @@
         <div class="control-buttons">
             <button class="btn btn-start-all" onclick="startAll()">Start All Nodes</button>
             <button class="btn btn-stop-all" onclick="stopAll()">Stop All Nodes</button>
+            <button id="recordBtn" class="btn btn-record" onclick="toggleRecording()">
+                <span id="recordIndicator" style="display: none;" class="record-indicator"></span>
+                <span id="recordText">Start Recording</span>
+            </button>
         </div>
     </div>
     
@@ -984,13 +1030,39 @@
         
         // Update node statuses
         function updateNodeStatuses(statusData) {
+            // Update node statuses
             Object.keys(statusData).forEach(nodeName => {
-                if (nodes[nodeName]) {
+                if (nodeName === 'bag_recording') {
+                    // Handle bag recording status
+                    updateRecordingStatus(statusData[nodeName]);
+                } else if (nodes[nodeName]) {
                     Object.assign(nodes[nodeName], statusData[nodeName]);
                 }
             });
             renderNodeList();
             updatePipelineColors();
+        }
+
+        function updateRecordingStatus(bagStatus) {
+            const recordBtn = document.getElementById('recordBtn');
+            const recordText = document.getElementById('recordText');
+            const recordIndicator = document.getElementById('recordIndicator');
+
+            if (bagStatus.recording) {
+                if (!isRecording) {
+                    isRecording = true;
+                    recordBtn.classList.add('recording');
+                    recordText.textContent = 'Stop Recording';
+                    recordIndicator.style.display = 'inline-block';
+                }
+            } else {
+                if (isRecording) {
+                    isRecording = false;
+                    recordBtn.classList.remove('recording');
+                    recordText.textContent = 'Start Recording';
+                    recordIndicator.style.display = 'none';
+                }
+            }
         }
         
         // Update pipeline colors based on status
@@ -1092,7 +1164,87 @@
             
             console.log('All nodes stop command sent');
         }
-        
+
+        // Bag recording management
+        let isRecording = false;
+
+        async function toggleRecording() {
+            const recordBtn = document.getElementById('recordBtn');
+            const recordText = document.getElementById('recordText');
+            const recordIndicator = document.getElementById('recordIndicator');
+
+            if (!isRecording) {
+                // Start recording
+                try {
+                    const response = await fetch('/api/bag/start', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({})
+                    });
+
+                    const data = await response.json();
+                    if (data.success) {
+                        isRecording = true;
+                        recordBtn.classList.add('recording');
+                        recordText.textContent = 'Stop Recording';
+                        recordIndicator.style.display = 'inline-block';
+                        console.log('Started bag recording:', data.status.path);
+                    } else {
+                        alert('Failed to start recording: ' + (data.error || 'Unknown error'));
+                    }
+                } catch (err) {
+                    console.error('Error starting recording:', err);
+                    alert('Failed to start recording');
+                }
+            } else {
+                // Stop recording
+                try {
+                    const response = await fetch('/api/bag/stop', {
+                        method: 'POST'
+                    });
+
+                    const data = await response.json();
+                    if (data.success) {
+                        isRecording = false;
+                        recordBtn.classList.remove('recording');
+                        recordText.textContent = 'Start Recording';
+                        recordIndicator.style.display = 'none';
+                        console.log('Stopped bag recording. Saved to:', data.path);
+                        alert('Recording saved to: ' + data.path);
+                    } else {
+                        alert('Failed to stop recording: ' + (data.error || 'Unknown error'));
+                    }
+                } catch (err) {
+                    console.error('Error stopping recording:', err);
+                    alert('Failed to stop recording');
+                }
+            }
+        }
+
+        // Check recording status on page load
+        async function checkRecordingStatus() {
+            try {
+                const response = await fetch('/api/bag/status');
+                const data = await response.json();
+
+                if (data.recording) {
+                    isRecording = true;
+                    const recordBtn = document.getElementById('recordBtn');
+                    const recordText = document.getElementById('recordText');
+                    const recordIndicator = document.getElementById('recordIndicator');
+
+                    recordBtn.classList.add('recording');
+                    recordText.textContent = 'Stop Recording';
+                    recordIndicator.style.display = 'inline-block';
+                    console.log('Recording in progress:', data.path);
+                }
+            } catch (err) {
+                console.error('Error checking recording status:', err);
+            }
+        }
+
         // Show node logs
         async function showNodeLogs(nodeName) {
             currentLogNode = nodeName;
@@ -1215,6 +1367,9 @@
             return edge;
         }
         
+        // Initialize on page load
+        checkRecordingStatus();
+
         // Refresh periodically
         setInterval(loadNodes, 2000);
         setInterval(loadTopics, 1000);  // Update topics more frequently for better frequency display

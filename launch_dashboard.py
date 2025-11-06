@@ -68,7 +68,7 @@ class TopicInfo:
 
 class ProcessManager:
     """Manages ROS2 node processes"""
-    
+
     def __init__(self):
         self.processes: Dict[str, subprocess.Popen] = {}
         self.log_queues: Dict[str, queue.Queue] = {}
@@ -79,6 +79,8 @@ class ProcessManager:
         self.topic_hz_threads: Dict[str, threading.Thread] = {}  # Topic frequency reader threads
         self.shutdown_event = threading.Event()
         self.topic_update_thread = None
+        self.bag_recording_process: Optional[subprocess.Popen] = None  # ROS2 bag recording process
+        self.bag_recording_path: Optional[str] = None  # Current bag recording path
         
     def add_node(self, config: NodeConfig):
         """Add a node configuration"""
@@ -421,14 +423,150 @@ class ProcessManager:
             if not self.shutdown_event.is_set():
                 print(f"Topic hz reader thread for {topic} exited unexpectedly")
             
+    def start_bag_recording(self, output_dir: str = None) -> bool:
+        """Start recording all topics to a ROS2 bag"""
+        if self.bag_recording_process and self.bag_recording_process.poll() is None:
+            print("Bag recording is already in progress")
+            return False
+
+        try:
+            # Get all active topics from running nodes
+            all_topics = set()
+            for node_name, config in self.node_configs.items():
+                if self.node_status[node_name].running:
+                    all_topics.update(config.topics_pub)
+                    all_topics.update(config.topics_sub)
+
+            # Add standard topics that are always useful
+            all_topics.add("/tf")
+            all_topics.add("/tf_static")
+            all_topics.add("/rosout")
+
+            if not all_topics:
+                print("No topics to record")
+                return False
+
+            # Set up output directory
+            if output_dir is None:
+                output_dir = "/media/psd/internalSSD/rosbags"
+
+            # Create directory if it doesn't exist
+            os.makedirs(output_dir, exist_ok=True)
+
+            # Create bag name with timestamp
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            bag_name = f"dashboard_recording_{timestamp}"
+            bag_path = os.path.join(output_dir, bag_name)
+
+            # Build the ros2 bag record command
+            topics_str = " ".join(all_topics)
+            command = f"ros2 bag record -o {bag_path} {topics_str}"
+
+            # Start the bag recording process
+            env = os.environ.copy()
+            env['ROS_DOMAIN_ID'] = '42'
+
+            self.bag_recording_process = subprocess.Popen(
+                command,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=env,
+                preexec_fn=os.setsid
+            )
+
+            self.bag_recording_path = bag_path
+            print(f"Started bag recording to: {bag_path}")
+            print(f"Recording {len(all_topics)} topics: {', '.join(sorted(all_topics))}")
+
+            # Start thread to monitor bag recording output
+            threading.Thread(
+                target=self._monitor_bag_output,
+                daemon=True
+            ).start()
+
+            return True
+
+        except Exception as e:
+            print(f"Failed to start bag recording: {e}")
+            return False
+
+    def stop_bag_recording(self) -> Optional[str]:
+        """Stop the current bag recording"""
+        if not self.bag_recording_process:
+            print("No bag recording in progress")
+            return None
+
+        if self.bag_recording_process.poll() is not None:
+            print("Bag recording process already terminated")
+            self.bag_recording_process = None
+            path = self.bag_recording_path
+            self.bag_recording_path = None
+            return path
+
+        try:
+            # Send SIGINT for graceful shutdown (like Ctrl+C)
+            pgid = os.getpgid(self.bag_recording_process.pid)
+            os.killpg(pgid, signal.SIGINT)
+
+            # Wait for process to terminate
+            try:
+                self.bag_recording_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                # Force kill if it doesn't stop gracefully
+                os.killpg(pgid, signal.SIGKILL)
+                self.bag_recording_process.wait()
+
+            print(f"Stopped bag recording. Saved to: {self.bag_recording_path}")
+            path = self.bag_recording_path
+            self.bag_recording_path = None
+            self.bag_recording_process = None
+            return path
+
+        except Exception as e:
+            print(f"Error stopping bag recording: {e}")
+            self.bag_recording_process = None
+            self.bag_recording_path = None
+            return None
+
+    def get_bag_recording_status(self) -> dict:
+        """Get the current bag recording status"""
+        is_recording = self.bag_recording_process is not None and self.bag_recording_process.poll() is None
+        return {
+            'recording': is_recording,
+            'path': self.bag_recording_path if is_recording else None
+        }
+
+    def _monitor_bag_output(self):
+        """Monitor bag recording process output"""
+        if not self.bag_recording_process:
+            return
+
+        for line in iter(self.bag_recording_process.stdout.readline, b''):
+            if self.shutdown_event.is_set():
+                break
+            if line:
+                print(f"[BAG] {line.decode().strip()}")
+
+        # Also monitor stderr
+        for line in iter(self.bag_recording_process.stderr.readline, b''):
+            if self.shutdown_event.is_set():
+                break
+            if line:
+                print(f"[BAG ERROR] {line.decode().strip()}")
+
     def shutdown_all(self):
         """Shutdown all nodes and topic monitors"""
         self.shutdown_event.set()
-        
+
+        # Stop bag recording if active
+        if self.bag_recording_process:
+            self.stop_bag_recording()
+
         # Stop all topic frequency monitors
         for topic in list(self.topic_hz_processes.keys()):
             self._stop_topic_monitor(topic)
-            
+
         # Stop all node processes
         for node_name in list(self.processes.keys()):
             self.stop_node(node_name)
@@ -644,6 +782,42 @@ def load_positions():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/bag/start', methods=['POST'])
+def start_bag_recording():
+    """Start recording all topics to a ROS2 bag"""
+    try:
+        data = request.json or {}
+        output_dir = data.get('output_dir')
+        success = process_manager.start_bag_recording(output_dir)
+        if success:
+            status = process_manager.get_bag_recording_status()
+            return jsonify({'success': True, 'status': status})
+        else:
+            return jsonify({'success': False, 'error': 'Failed to start bag recording'}), 400
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/bag/stop', methods=['POST'])
+def stop_bag_recording():
+    """Stop the current bag recording"""
+    try:
+        saved_path = process_manager.stop_bag_recording()
+        if saved_path:
+            return jsonify({'success': True, 'path': saved_path})
+        else:
+            return jsonify({'success': False, 'error': 'No recording in progress'}), 400
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/bag/status')
+def get_bag_recording_status():
+    """Get the current bag recording status"""
+    try:
+        status = process_manager.get_bag_recording_status()
+        return jsonify(status)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 @socketio.on('connect')
 def handle_connect():
     """Handle client connection"""
@@ -679,11 +853,11 @@ def broadcast_status_updates():
     """Broadcast node status updates to all clients"""
     while not process_manager.shutdown_event.is_set():
         time.sleep(1)
-        
+
         # Update LED statuses
         for node_name in process_manager.node_configs:
             process_manager._update_led_status(node_name)
-            
+
         # Broadcast status
         status_data = {}
         for name, status in process_manager.node_status.items():
@@ -694,6 +868,10 @@ def broadcast_status_updates():
                 'warning_count': status.warning_count,
                 'topic_frequencies': status.topic_frequencies
             }
+
+        # Add bag recording status
+        status_data['bag_recording'] = process_manager.get_bag_recording_status()
+
         socketio.emit('status_update', status_data)
 
 def setup_nodes():
@@ -745,9 +923,19 @@ def setup_nodes():
             color="#e74c3c",
             position=(500, 100)
         ),
-        # 5. SLAM
+        # 5. Robot Localization (EKF)
         NodeConfig(
-            name="slam",
+            name="robot_localization",
+            command="ros2 launch robot_localization psd_ekf_indoor.launch.py",
+            topics_pub=["/odometry/filtered", "/tf"],
+            topics_sub=["/imu/data", "/vesc/core"],
+            expected_freq={"/odometry/filtered": 50},
+            color="#34495e",
+            position=(300, 200)
+        ),
+        # 6. Graph SLAM
+        NodeConfig(
+            name="graph_slam",
             command="ros2 run psd_slam psd_slam_node",
             topics_pub=["/slam/pose", "/slam/path", "/slam/map", "/slam/track_limits", "/slam/track_boundaries_viz", "/slam/graph"],
             topics_sub=["/imu/data", "/possible_cones_xyz"],
@@ -755,7 +943,7 @@ def setup_nodes():
             color="#9b59b6",
             position=(300, 300)
         ),
-        # 6. Path planning
+        # 7. Path planning
         NodeConfig(
             name="path_planning",
             command="ros2 run psd_path_planning exploration_standalone",
@@ -765,7 +953,17 @@ def setup_nodes():
             color="#1abc9c",
             position=(500, 300)
         ),
-        # 7. MPC controller
+        # 8. Backup Controller
+        NodeConfig(
+            name="backup_controller",
+            command="ros2 launch psd_backup_controller backup_controller.launch.py",
+            topics_pub=["/cmd_vel_backup"],
+            topics_sub=["/slam/pose", "/trajectory_waypoints"],
+            expected_freq={"/cmd_vel_backup": 50},
+            color="#95a5a6",
+            position=(700, 300)
+        ),
+        # 9. MPC controller
         NodeConfig(
             name="psd_mpc",
             command="ros2 launch psd_mpc acados_mpc.launch.py",

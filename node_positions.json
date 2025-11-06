@@ -1,30 +1,38 @@
 {
   "multi_sensor": {
-    "x": 206,
-    "y": -182
+    "x": 0,
+    "y": 0
   },
   "vehicle_description": {
-    "x": 183,
-    "y": -242
+    "x": 200,
+    "y": 0
   },
   "vesc_driver": {
-    "x": 206,
-    "y": 438
+    "x": 400,
+    "y": 0
   },
   "camera_perception": {
-    "x": 447,
-    "y": 17
+    "x": 0,
+    "y": 150
   },
-  "slam": {
-    "x": 117,
-    "y": 13
+  "robot_localization": {
+    "x": 200,
+    "y": 150
   },
-  "path_planning": {
+  "graph_slam": {
     "x": 400,
     "y": 150
   },
+  "path_planning": {
+    "x": 0,
+    "y": 300
+  },
+  "backup_controller": {
+    "x": 200,
+    "y": 300
+  },
   "psd_mpc": {
-    "x": 228,
-    "y": 310
+    "x": 400,
+    "y": 300
   }
 }
